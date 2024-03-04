@@ -1,7 +1,7 @@
 # smellysearch
 
-smelly search, smeally search
-where are they looking(for) you!
+> 🎵 smelly search, smeally search
+> where are they looking(for) you! 🎵
 
 ```shell
 docker build -t smellysearch .
