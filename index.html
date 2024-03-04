@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.jade.min.css" />
+  </head>
+  <body>
+    <header class="container">
+      <div id="searchbox" focus></div>
+    </header>
+    <main class="container">
+      <div class="wrapper">
+        <div id="hits"></div>
+      </div>
+    </main>
+    <dialog id="load-data">
+      <article>
+        <header>
+          <h2>Load Search Data</h2>
+        </header>
+        <form name="load-data-form" id="load-data-form" method="GET">
+          <fieldset>
+            <label>
+              Server Location
+              <input type="text" name="serverUrl" placeholder="e.g. localhost:7700" required>
+            </label>
+            <label>
+              Search Data
+              <input type="file" name="dataFile" required>
+            </label>
+          </fieldset>
+        </form>
+        <footer>
+          <button id="load-data-form-submit" type="submit" form="load-data-form">Submit</button>
+        </footer>
+      </article>
+    </dialog>
+  </body>
+  <style>
+  /* .ais-SearchBox-submit { */
+  /*   border: var(--pico-border-width) solid var(--pico-border-color); */
+  /*   border-top-left-radius: 0; */
+  /*   border-bottom-left-radius: 0; */
+  /*   border-top-right-radius: 5rem; */
+  /*   border-bottom-right-radius: 5rem; */
+  /* } */
+  .ais-InfiniteHits-loadMore {
+    display: block;
+    margin: auto;
+    width: 75%;
+  }
+
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@meilisearch/instant-meilisearch/dist/instant-meilisearch.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/instantsearch.js@4"></script>
+  <script>
+    /*
+     * Modal
+     *
+     * Pico.css - https://picocss.com
+     * Copyright 2019-2024 - Licensed under MIT
+     */
+
+    // Config
+    const isOpenClass = "modal-is-open";
+    const openingClass = "modal-is-opening";
+    const closingClass = "modal-is-closing";
+    const scrollbarWidthCssVar = "--pico-scrollbar-width";
+    const animationDuration = 400; // ms
+    let visibleModal = null;
+
+    // Toggle modal
+    const toggleModal = (event) => {
+      event.preventDefault();
+      const modal = document.getElementById(event.currentTarget.dataset.target);
+      if (!modal) return;
+      modal && (modal.open ? closeModal(modal) : openModal(modal));
+    };
+
+    // Open modal
+    const openModal = (modal) => {
+      const { documentElement: html } = document;
+      const scrollbarWidth = getScrollbarWidth();
+      if (scrollbarWidth) {
+        html.style.setProperty(scrollbarWidthCssVar, `${scrollbarWidth}px`);
+      }
+      html.classList.add(isOpenClass, openingClass);
+      setTimeout(() => {
+        visibleModal = modal;
+        html.classList.remove(openingClass);
+      }, animationDuration);
+      modal.showModal();
+    };
+
+    // Close modal
+    const closeModal = (modal) => {
+      visibleModal = null;
+      const { documentElement: html } = document;
+      html.classList.add(closingClass);
+      setTimeout(() => {
+        html.classList.remove(closingClass, isOpenClass);
+        html.style.removeProperty(scrollbarWidthCssVar);
+        modal.close();
+      }, animationDuration);
+    };
+
+    // Get scrollbar width
+    const getScrollbarWidth = () => {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      return scrollbarWidth;
+    };
+
+    // Is scrollbar visible
+    const isScrollbarVisible = () => {
+      return document.body.scrollHeight > screen.height;
+    };
+    async function sleep(delayMs) { return new Promise((resolve) => setTimeout(resolve, delayMs)); }
+
+
+   /*
+    * Custom JS for Meilisearch
+    */
+
+    //
+    // Check for ?serverUrl=<url> param
+    //
+    const urlParams = new URLSearchParams(window.location.search);
+    const serverUrlParam = urlParams.get('serverUrl');
+    if(serverUrlParam === null || serverUrlParam === '') {
+      openModal(document.getElementById('load-data'));
+    }
+
+    //
+    // Load data form fields
+    //
+    const loadDataForm = document.getElementById('load-data-form');
+    const loadDataFormSubmit = document.getElementById('load-data-form-submit');
+    const dataFile = document.querySelector("input[name=dataFile]");
+    const serverUrl = document.querySelector("input[name=serverUrl]");
+    loadDataForm.addEventListener("submit", onLoadDataFormSubmit);
+
+    //
+    // Meilisearch requests
+    //
+    function postData(url = "", data = {}) {
+      return new Promise((resolve, reject) => {
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: data,
+        })
+        .then((response) => {
+            if (response.ok) {
+              return response.json();
+            }
+
+            return reject(response);
+          }
+        )
+        .then((data) => resolve(data))
+        .catch((error) => reject(error));
+      })
+    }
+    function serverUrlHelthy(serverUrl = "") {
+      return new Promise((resolve, reject) => {
+        fetch(`http://${serverUrl}/health`, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        })
+        .then((response) => {
+            if (response.ok) {
+              return response.json();
+            }
+
+            return reject(response);
+          }
+        )
+        .then((data) => resolve(data))
+        .catch((error) => reject(error));
+      });
+    }
+    function getTask(serverUrl = "", taskId) {
+      return new Promise((resolve, reject) => {
+        fetch(`http://${serverUrl}/tasks/${taskId}`, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        })
+        .then((response) => {
+            if (response.ok) {
+              return response.json();
+            }
+
+            return reject(response);
+          }
+        )
+        .then((data) => resolve(data))
+        .catch((error) => reject(error));
+      });
+    }
+    async function getTaskUntilEndState(serverUrl = "", taskId, count = 0) {
+      return getTask(serverUrl, taskId).then(async (data) => {
+        if (count >= 1000) {
+          throw new Error({message: "too many requests made, aborting"})
+        }
+        if (data.status === "succeeded") {
+          return data
+        }
+        if (data.status === "failed") {
+          throw new Error(data)
+        }
+
+        await sleep(200);
+        return getTaskUntilEndState(serverUrl, taskId, count+1);
+      })
+    }
+
+    //
+    // Button spinner styling
+    //
+    function setButtonBusy(button) {
+      button.setAttribute("aria-busy", true);
+      button.setAttribute("class", "secondary outline");
+    }
+    function resetButtonBusy(button) {
+      button.setAttribute("aria-busy", false);
+      button.setAttribute("class", "primary");
+    }
+
+    //
+    // Input validation styling
+    //
+    function setInvalid(field, message="invalid") {
+      field.setAttribute("aria-invalid", true);
+      field.setAttribute("aria-describedby", "valid-helper");
+      field.insertAdjacentHTML("afterend", `<small id="valid-helper-${field.getAttribute("name")}">${message}</small>`)
+    }
+    function setValid(field) {
+      field.setAttribute("aria-invalid", false);
+      field.setAttribute("aria-describedby", "");
+
+      let helper = document.getElementById(`valid-helper-${field.getAttribute("name")}`);
+      if (helper !== null && helper !== undefined) {
+        helper.remove();
+      }
+    }
+    function resetValid(field) {
+      field.setAttribute("aria-invalid", "");
+      field.setAttribute("aria-describedby", "");
+
+      let helper = document.getElementById(`valid-helper-${field.getAttribute("name")}`);
+      if (helper !== null && helper !== undefined) {
+        helper.remove();
+      }
+    }
+
+    //
+    // Form submission handler
+    //
+    function onLoadDataFormSubmit(event) {
+      event.preventDefault();
+
+      // reset form validation and waiting styling
+      setButtonBusy(loadDataFormSubmit);
+      resetValid(serverUrl);
+      resetValid(dataFile);
+
+      const dataForm = new FormData(loadDataForm);
+      return postData(`http://${dataForm.get("serverUrl")}/indexes/movies/documents?primaryKey=id`, dataForm.get("dataFile")).then(async (data) => {
+        return getTaskUntilEndState(dataForm.get("serverUrl"), data.taskUid).then((data) => {
+          // Update window url with ?serverUrl=<serverUrl> param
+          urlParams.set("serverUrl", `${dataForm.get("serverUrl")}`);
+          window.location.search = urlParams.toString();
+
+          return
+        }).catch((error) => console.error(error));
+      }).catch(async (error) => {
+        await sleep(300);
+
+        if (error.status === 400) {
+          dataFile.value = '';
+          setInvalid(dataFile, "File format not recognised");
+        } else {
+          setInvalid(serverUrl, "Unable to connect to meilisearch address");
+        }
+
+        resetButtonBusy(loadDataFormSubmit);
+
+        console.error(error);
+      });
+    }
+            
+
+
+    //
+    // Initialise search
+    //
+    serverUrlHelthy(serverUrlParam).then(() => {
+      const search = instantsearch({
+        indexName: "movies",
+        searchClient: instantMeiliSearch(
+          `http://${serverUrlParam}`
+        ).searchClient
+        });
+
+      search.addWidgets([
+        instantsearch.widgets.searchBox({
+          container: "#searchbox",
+          placeholder: "Search for movies...",
+          autofocus: true,
+          showReset: false,
+        }),
+        instantsearch.widgets.configure({ hitsPerPage: 30 }),
+        instantsearch.widgets.infiniteHits({
+          container: "#hits",
+          templates: {
+            item(hit, { html, components }) {
+              return html`
+                <article>
+                  <header>
+                    <img style="float: left; margin-right: var(--pico-spacing);" width="150" src="${hit.poster}" />
+                    <hgroup>
+                      <h2>
+                        ${components.Highlight({ attribute: 'title', hit })}
+                      </h2>
+                      <p>${new Date(hit.release_date * 1000).toLocaleDateString()}</p>
+                      <p>${components.Highlight({ attribute: 'genres', hit })}</p>
+                    </hgroup>
+                    <p>${components.Highlight({ attribute: 'overview', hit })}</p>
+                    <div style="clear: both;"></div>
+                  </header>
+                </article>
+              `;
+            },
+          },
+        })
+      ]);
+
+      search.start();
+    }).catch((error) => {
+      // pop modal if we can't ping meiliesearch /health endpoint
+      openModal(document.getElementById('load-data'));
+      console.error(error);
+    });
+  </script>
+</html>
