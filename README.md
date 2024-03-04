@@ -1,6 +1,7 @@
 # smellysearch
 
-> 🎵 smelly search, smeally search
+> 🎵 smelly search, smeelllyy search
+
 > where are they looking(for) you! 🎵
 
 ```shell
